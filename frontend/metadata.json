@@ -1,0 +1,6 @@
+{
+  "name": "StaffHandbook & HR Memo Verifier",
+  "description": "Company policy handbook and two-factor verified HR memo acknowledgement system with Telegram verification tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

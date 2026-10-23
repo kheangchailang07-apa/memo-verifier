@@ -1,0 +1,4 @@
+[CORS] Allowed origins: https://memo.apa1-eva.com, http://localhost:3366
+[DB] Connecting to abadbrp@3.25.19.174:3306/memo_verifier | env: .env1 | app port: 5422 | node_env: development
+[DB] Connection established successfully. -> abadbrp@3.25.19.174:3306/memo_verifier | env: .env1 | app port: 5422 | node_env: development
+[Server] Running on http://localhost:5422
