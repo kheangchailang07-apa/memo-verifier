@@ -1,4 +1,4 @@
-# Project Structure — Memo Verifier
+# Memo Verifier
 
 Short onboarding guide for new developers.
 
@@ -44,8 +44,8 @@ memo-verifier/
 │   ├── scripts/              One-off migrations (S3 PDFs/signatures)
 │   └── ecosystem.config.cjs  PM2 backend processes
 │
-└── PROJECT_STRUCTURE.md
-└── FLOWCHART.md
+├── README.md                 This guide
+└── FLOWCHART.md              Mermaid diagrams
 ```
 
 ## Frontend — key points
