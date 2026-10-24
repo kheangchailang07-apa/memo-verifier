@@ -46,10 +46,11 @@ export const describeTelegramError = (statusCode: number, description: string): 
 export const callTelegram = async (
   method: string,
   token: string,
-  payload: Record<string, any> = {}
+  payload: Record<string, any> = {},
+  requestTimeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<TelegramApiResponse> => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
 
   try {
     const response = await ipv4Fetch(`${TELEGRAM_API_BASE}/bot${token}/${method}`, {
@@ -72,8 +73,22 @@ export const callTelegram = async (
     if (error instanceof Error && error.name === 'AbortError') {
       return { ok: false, description: 'Telegram API timed out. Please retry.' };
     }
+    const cause = (error as any)?.cause;
+    const code = cause?.code || (error as any)?.code;
+    if (code === 'EACCES' || code === 'ENETUNREACH' || code === 'ECONNREFUSED') {
+      return {
+        ok: false,
+        description: 'The backend cannot connect to Telegram at api.telegram.org:443. Allow outbound HTTPS from the backend server, then retry.',
+      };
+    }
+    if (code === 'ETIMEDOUT' || code === 'ECONNRESET' || code === 'EAI_AGAIN') {
+      return {
+        ok: false,
+        description: 'The backend could not reach Telegram due to a network timeout or DNS error. Check the server internet/DNS connection, then retry.',
+      };
+    }
     const message = error instanceof Error ? error.message : 'Unable to reach the Telegram API.';
-    return { ok: false, description: message };
+    return { ok: false, description: message === 'fetch failed' ? 'The backend could not connect to Telegram. Check outbound HTTPS and DNS from the backend server.' : message };
   } finally {
     clearTimeout(timer);
   }
@@ -104,18 +119,31 @@ const extractChat = (update: any): any =>
  * pending update queue (membership changes and messages alike). Channels and
  * private chats are deliberately excluded — only group targets are surfaced.
  */
-export const listBotGroups = async (token: string): Promise<{ ok: boolean; groups?: TelegramGroup[]; description?: string }> => {
-  const response = await callTelegram('getUpdates', token, {
-    timeout: 0,
-    allowed_updates: [
-      'message',
-      'edited_message',
-      'channel_post',
-      'my_chat_member',
-      'chat_member',
-      'left_chat_member',
-    ],
-  });
+export const listBotGroups = async (
+  token: string,
+  waitForUpdateSeconds = 25
+): Promise<{ ok: boolean; groups?: TelegramGroup[]; description?: string }> => {
+  // Telegram does not allow getUpdates while a webhook is active. Check first
+  // so the setup screen can explain the conflict without changing that webhook.
+  const webhook = await callTelegram('getWebhookInfo', token);
+  if (!webhook.ok) {
+    return { ok: false, description: webhook.description || 'Unable to check the Telegram webhook status.' };
+  }
+  if (webhook.result?.url) {
+    return {
+      ok: false,
+      description: 'This bot has an active Telegram webhook, so Telegram blocks group discovery by polling. Keep the webhook active and send a message in the group to its webhook receiver, or temporarily remove the webhook in Telegram before using Get Groups.',
+    };
+  }
+
+  const response = await readUpdates(token, [
+    'message',
+    'edited_message',
+    'channel_post',
+    'my_chat_member',
+    'chat_member',
+    'left_chat_member',
+  ], waitForUpdateSeconds);
 
   if (!response.ok) {
     return { ok: false, description: response.description || 'Unable to read the bot update queue.' };
@@ -158,8 +186,14 @@ const buildPrivateChat = (chat: any): TelegramPrivateChat => ({
  * portal polls while another screen (or the same screen a moment ago) reads
  * the queue - so retry a couple of times instead of failing the caller.
  */
-const readUpdates = async (token: string, allowedUpdates: string[]): Promise<TelegramApiResponse> => {
-  const call = () => callTelegram('getUpdates', token, { timeout: 0, allowed_updates: allowedUpdates });
+const readUpdates = async (
+  token: string,
+  allowedUpdates: string[],
+  timeoutSeconds = 0
+): Promise<TelegramApiResponse> => {
+  const requestTimeoutMs = Math.max(REQUEST_TIMEOUT_MS, (timeoutSeconds + 5) * 1000);
+  const call = () =>
+    callTelegram('getUpdates', token, { timeout: timeoutSeconds, allowed_updates: allowedUpdates }, requestTimeoutMs);
 
   let response = await call();
   for (let attempt = 0; attempt < 2 && !response.ok && /conflict/i.test(response.description || ''); attempt++) {

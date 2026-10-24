@@ -126,6 +126,31 @@ export const storeSignatureImage = async (
   return key;
 };
 
+/**
+ * Development can explicitly keep newly captured signatures in the existing
+ * users.signatureDataUrl column when S3 is unavailable. Production always
+ * requires S3, so an upload failure there remains a real save error.
+ */
+export const storeSignatureImageForProfile = async (
+  ownerId: string,
+  body: Buffer,
+  contentType: string,
+  dataUrl: string
+): Promise<{ key: string | null; dataUrl: string | null }> => {
+  try {
+    return { key: await storeSignatureImage(ownerId, body, contentType), dataUrl: null };
+  } catch (error) {
+    const publicOrigin = (process.env.PUBLIC_BASE_URL || '').trim();
+    const isLocalDevelopmentOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(publicOrigin);
+    const localFallbackEnabled =
+      process.env.SIGNATURE_STORAGE_MODE === 'local' && isLocalDevelopmentOrigin;
+    if (!localFallbackEnabled) throw error;
+
+    console.warn('[SIG] S3 unavailable; storing this signature in the development database.');
+    return { key: null, dataUrl };
+  }
+};
+
 /** Reads a stored signature back as a data URL (for the PDF and the preview). */
 export const readSignatureDataUrl = async (key: string | null | undefined): Promise<string | null> => {
   if (!key) return null;

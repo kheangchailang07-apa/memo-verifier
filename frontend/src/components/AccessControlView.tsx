@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, UserRole, RolePermissions, AcknowledgementRecord, Department } from '../types';
-import { botService } from '../utils/services';
+import { botService, usersService } from '../utils/services';
 import { formatPhnomPenhTime } from '../utils/format';
 import { normalizeSignatureImage } from '../utils/signature';
 import {
@@ -61,6 +61,11 @@ export const AccessControlView: React.FC<AccessControlViewProps> = ({
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [isAddUserOpen, setIsAddUserOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [passwordRevealUser, setPasswordRevealUser] = useState<User | null>(null);
+  const [adminPasswordForReveal, setAdminPasswordForReveal] = useState('');
+  const [revealedUserPassword, setRevealedUserPassword] = useState<string | null>(null);
+  const [passwordRevealError, setPasswordRevealError] = useState<string | null>(null);
+  const [isRevealingPassword, setIsRevealingPassword] = useState(false);
   // Electronic signature upload inside the admin "Edit Profile" dialog.
   const [signatureError, setSignatureError] = useState<string | null>(null);
   const [isProcessingSignature, setIsProcessingSignature] = useState(false);
@@ -84,6 +89,39 @@ export const AccessControlView: React.FC<AccessControlViewProps> = ({
   const [addUserError, setAddUserError] = useState<string | null>(null);
   const [editUserError, setEditUserError] = useState<string | null>(null);
   const [isVerifyingTelegram, setIsVerifyingTelegram] = useState(false);
+
+  const openPasswordReveal = (user: User) => {
+    setPasswordRevealUser(user);
+    setAdminPasswordForReveal('');
+    setRevealedUserPassword(null);
+    setPasswordRevealError(null);
+  };
+
+  const closePasswordReveal = () => {
+    setPasswordRevealUser(null);
+    setAdminPasswordForReveal('');
+    setRevealedUserPassword(null);
+    setPasswordRevealError(null);
+    setIsRevealingPassword(false);
+  };
+
+  const handleRevealUserPassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!passwordRevealUser || !adminPasswordForReveal) return;
+    setIsRevealingPassword(true);
+    setPasswordRevealError(null);
+    try {
+      const password = await usersService.revealPassword(passwordRevealUser.id, adminPasswordForReveal);
+      setRevealedUserPassword(password);
+      setAdminPasswordForReveal('');
+    } catch (err) {
+      setPasswordRevealError(
+        err instanceof Error && err.message ? err.message : 'Could not verify your admin password.'
+      );
+    } finally {
+      setIsRevealingPassword(false);
+    }
+  };
 
   // Confirms a bound Telegram handle really belongs to a Telegram account
   // before a credential is saved. Returns an error message, or null to allow the save.
@@ -669,6 +707,18 @@ export const AccessControlView: React.FC<AccessControlViewProps> = ({
                             {u.status === 'active' ? 'Active' : 'Suspended'}
                           </button>
 
+                          {currentUser.role === 'admin' && (
+                            <button
+                              type="button"
+                              onClick={() => openPasswordReveal(u)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition-colors"
+                              title={`Reveal ${u.name}'s password after admin verification`}
+                              aria-label={`Reveal ${u.name}'s password`}
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                          )}
+
                           {/* Edit Profile Button */}
                           <button
                             onClick={() => setEditingUser(u)}
@@ -777,6 +827,18 @@ export const AccessControlView: React.FC<AccessControlViewProps> = ({
                       {u.status === 'active' ? 'Active' : 'Suspended'}
                     </button>
 
+                    {currentUser.role === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => openPasswordReveal(u)}
+                        className="p-2 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 transition-colors"
+                        title={`Reveal ${u.name}'s password after admin verification`}
+                        aria-label={`Reveal ${u.name}'s password`}
+                      >
+                        <Eye className="w-4 h-4" />
+                      </button>
+                    )}
+
                     <button
                       onClick={() => openUserEditor(u)}
                       className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-indigo-50 dark:bg-slate-700 dark:hover:bg-indigo-950/50 text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400 font-semibold text-[11px] transition-colors border border-slate-200 dark:border-slate-600"
@@ -823,6 +885,22 @@ export const AccessControlView: React.FC<AccessControlViewProps> = ({
                   <span>{editUserError}</span>
                 </div>
               )}
+
+              <div>
+                <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  Full Name:
+                </label>
+                <input
+                  type="text"
+                  value={editingUser.name}
+                  onChange={(e) => setEditingUser({ ...editingUser, name: e.target.value })}
+                  placeholder="Enter the user's full name"
+                  autoComplete="name"
+                  maxLength={100}
+                  required
+                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs"
+                />
+              </div>
 
               <div>
                 <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
@@ -1475,6 +1553,104 @@ export const AccessControlView: React.FC<AccessControlViewProps> = ({
                 Done
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {passwordRevealUser && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reveal-user-password-title"
+            className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-5 shadow-2xl space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 shrink-0 rounded-xl bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 flex items-center justify-center">
+                <Eye className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 id="reveal-user-password-title" className="font-bold text-base text-slate-900 dark:text-white">
+                  Reveal {passwordRevealUser.name}'s password
+                </h3>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Re-enter your administrator password. This reveal is recorded in the audit log.
+                </p>
+              </div>
+            </div>
+
+            {passwordRevealError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900 text-xs">
+                {passwordRevealError}
+              </div>
+            )}
+
+            {revealedUserPassword !== null ? (
+              <div className="space-y-2">
+                <label htmlFor="revealed-user-password" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Account password
+                </label>
+                <input
+                  id="revealed-user-password"
+                  type="text"
+                  readOnly
+                  value={revealedUserPassword}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 font-mono text-sm text-slate-900 dark:text-white"
+                />
+                <p className="text-[10px] text-slate-500">Close this window to hide the password.</p>
+              </div>
+            ) : (
+              <form onSubmit={handleRevealUserPassword} className="space-y-3">
+                <div>
+                  <label htmlFor="admin-password-to-reveal" className="block mb-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    Your administrator password
+                  </label>
+                  <input
+                    id="admin-password-to-reveal"
+                    type="password"
+                    autoComplete="current-password"
+                    autoFocus
+                    required
+                    value={adminPasswordForReveal}
+                    onChange={(event) => {
+                      setAdminPasswordForReveal(event.target.value);
+                      setPasswordRevealError(null);
+                    }}
+                    className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={closePasswordReveal}
+                    className="px-3 py-2 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRevealingPassword || !adminPasswordForReveal}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 px-4 py-2 text-white font-bold"
+                  >
+                    {isRevealingPassword ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
+                    {isRevealingPassword ? 'Verifying…' : 'Verify & reveal'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {revealedUserPassword !== null && (
+              <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={closePasswordReveal}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 dark:bg-white px-4 py-2 text-white dark:text-slate-900 font-bold"
+                >
+                  <EyeOff className="w-4 h-4" />
+                  Hide password
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

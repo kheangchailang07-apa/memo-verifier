@@ -105,6 +105,12 @@ export const authService = {
 
 export const usersService = {
   list: () => listOf<User>(api.get('/users'), 'users'),
+  revealPassword: async (id: string, adminPassword: string): Promise<string> => {
+    const res = await api.post(`/users/${encodeURIComponent(id)}/reveal-password`, {
+      data: { adminPassword },
+    });
+    return String(res.password ?? '');
+  },
   create: async (payload: Partial<User> & { password?: string }) => {
     const res = await api.post('/users', { data: payload });
     return res.user as User;

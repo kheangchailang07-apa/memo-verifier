@@ -102,7 +102,69 @@ export const getBotGroups = async (req: any, res: Response): Promise<void> => {
       return;
     }
 
-    const [result, me] = await Promise.all([listBotGroups(token), callTelegram('getMe', token)]);
+    const me = await callTelegram('getMe', token);
+    if (!me.ok) {
+      res.status(400).json({ success: false, message: me.description || 'Unable to validate the Telegram bot token.' });
+      return;
+    }
+
+    const actualUsername = me.result?.username ? `@${me.result.username}` : null;
+    const previouslyConfiguredUsername = (settings?.botUsername || '').trim();
+    if (actualUsername && settings && settings.botUsername !== actualUsername) {
+      // Keep the configured username aligned with the identity of the saved
+      // token, so the setup screen cannot suggest a command for another bot.
+      await settings.update({ botUsername: actualUsername });
+    }
+
+    const configuredTarget = (settings?.channelName || '').trim();
+    if (configuredTarget) {
+      // Telegram cannot enumerate a bot's full group membership. Resolve the
+      // already-configured target directly so quiet groups remain selectable.
+      const target = await callTelegram('getChat', token, { chat_id: configuredTarget });
+      const chat = target.ok ? target.result : null;
+      if (chat?.id && (chat.type === 'group' || chat.type === 'supergroup')) {
+        res.json({
+          success: true,
+          groups: [{
+            id: String(chat.id),
+            title: chat.title || chat.username || `Group ${chat.id}`,
+            type: chat.type,
+            username: chat.username ? `@${chat.username}` : null,
+          }],
+          bot: { id: String(me.result?.id ?? ''), username: actualUsername, firstName: me.result?.first_name || null },
+        });
+        return;
+      }
+
+      // A stale configured target should not hide another group. Give the
+      // admin time to send a command in the intended group during this fetch.
+      const queued = await listBotGroups(token);
+      if (!queued.ok) {
+        res.status(400).json({ success: false, message: queued.description || 'Unable to read Telegram group updates.' });
+        return;
+      }
+      if ((queued.groups?.length || 0) > 0) {
+        res.json({
+          success: true,
+          groups: queued.groups,
+          bot: { id: String(me.result?.id ?? ''), username: actualUsername, firstName: me.result?.first_name || null },
+        });
+        return;
+      }
+      {
+        const identityMismatch = previouslyConfiguredUsername && actualUsername && previouslyConfiguredUsername.toLowerCase() !== actualUsername.toLowerCase();
+        const identityMessage = identityMismatch
+          ? ` The saved bot username was ${previouslyConfiguredUsername}, but this token belongs to ${actualUsername}.`
+          : '';
+        res.status(400).json({
+          success: false,
+          message: `Telegram cannot find the saved group target ${configuredTarget} for ${actualUsername || 'this bot'}.${identityMessage} Verify the group ID and make sure this exact bot is a member. If the group contains a different bot, use that bot's token or add ${actualUsername || 'this bot'} to the group.`,
+        });
+        return;
+      }
+    }
+
+    const result = await listBotGroups(token);
     if (!result.ok) {
       res.status(400).json({ success: false, message: result.description || 'Unable to list bot groups.' });
       return;
@@ -111,13 +173,7 @@ export const getBotGroups = async (req: any, res: Response): Promise<void> => {
     res.json({
       success: true,
       groups: result.groups || [],
-      bot: me.ok
-        ? {
-            id: String(me.result?.id ?? ''),
-            username: me.result?.username ? `@${me.result.username}` : null,
-            firstName: me.result?.first_name || null,
-          }
-        : null,
+      bot: { id: String(me.result?.id ?? ''), username: actualUsername, firstName: me.result?.first_name || null },
     });
   } catch (error) {
     console.error('getBotGroups error:', error);

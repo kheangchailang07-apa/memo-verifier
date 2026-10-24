@@ -71,6 +71,8 @@ export const TelegramBotConfigModal: React.FC<TelegramBotConfigModalProps> = ({
 
   // Simulator controls
   const staffUsers = users.filter((u) => u.role === 'staff');
+  const trimmedBotUsername = botUsername.trim();
+  const groupStartCommand = `/start${trimmedBotUsername ? (trimmedBotUsername.startsWith('@') ? trimmedBotUsername : `@${trimmedBotUsername}`) : '@your_bot_username'}`;
   const [selectedStaffId, setSelectedStaffId] = useState<string>(staffUsers[0]?.id || '');
   const [customToken, setCustomToken] = useState<string>('');
   const [simulatedFeedback, setSimulatedFeedback] = useState<string | null>(null);
@@ -151,13 +153,21 @@ export const TelegramBotConfigModal: React.FC<TelegramBotConfigModalProps> = ({
     setIsLoadingGroups(true);
     setGroupsError(null);
     try {
+      // The token field is editable locally; persist it before asking the
+      // backend to query Telegram, otherwise a freshly entered token is ignored.
+      const saveError = await persistDraft();
+      if (saveError) {
+        setGroupsError(saveError);
+        return;
+      }
       const { groups: list, bot } = await botService.groups();
       setGroups(list);
       const match = list.find((g) => g.id === channelName || g.username === channelName);
       setSelectedGroupId(match?.id ?? '');
       if (bot?.username) setBotUsername(bot.username);
       if (list.length === 0) {
-        setGroupsError('No groups found. Add the bot to a group first, then fetch again.');
+        const startCommand = bot?.username ? `/start${bot.username}` : groupStartCommand;
+        setGroupsError(`Bot ${bot?.username || ''} connected, but Telegram sent no group update during the fetch. In the target group, send ${startCommand}, then try again.`);
       }
     } catch (err) {
       setGroups([]);
@@ -465,8 +475,11 @@ export const TelegramBotConfigModal: React.FC<TelegramBotConfigModalProps> = ({
                   ) : (
                     <Users className="w-3.5 h-3.5 text-sky-500" />
                   )}
-                  <span>{isLoadingGroups ? 'Fetching groups…' : 'Get Groups'}</span>
+                  <span>{isLoadingGroups ? 'Waiting for group update…' : 'Get Groups'}</span>
                 </button>
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  Click Get Groups, then send {groupStartCommand} in the target group while it is waiting. You can also send the command first, then fetch.
+                </span>
 
                 {groupsError && (
                   <div className="mt-2 p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 flex items-start gap-1.5 text-[11px] font-medium">

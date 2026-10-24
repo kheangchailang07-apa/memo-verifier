@@ -5,7 +5,7 @@ import { User, Session, AuditLog } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { encryptPassword, decryptPassword, verifyPassword } from '../utils/passwordCrypto';
 import { normalizeSignatureDataUrl, normalizeSignatureFileName } from '../utils/signature';
-import { originFromRequest, presentUser, removeSignatureObject, signaturePublicUrl, storeSignatureImage } from '../services/signatureStorage';
+import { originFromRequest, presentUser, removeSignatureObject, signaturePublicUrl, storeSignatureImageForProfile } from '../services/signatureStorage';
 import { readSignatureDataUrl } from '../services/signatureStorage';
 
 // Cookies must be Secure on the https domains but not on plain-http local dev:
@@ -248,15 +248,22 @@ export const updateProfile = async (req: any, res: Response): Promise<void> => {
       const previousKey = user.signatureS3Key;
 
       if (signature.dataUrl && signature.buffer && signature.contentType) {
-      // The artwork is saved to S3; only the object key stays on the user row.
-      const key = await storeSignatureImage(user.id, signature.buffer, signature.contentType);
+      const stored = await storeSignatureImageForProfile(
+        user.id,
+        signature.buffer,
+        signature.contentType,
+        signature.dataUrl
+      );
+      const key = stored.key;
       updates.signatureS3Key = key;
       // The URL of this app is stored alongside the key — an AWS presigned
       // link would expire and could not be used as a record.
-      updates.signatureS3Url = signaturePublicUrl(key, originFromRequest(req));
-      updates.signatureDataUrl = null;
+      updates.signatureS3Url = key ? signaturePublicUrl(key, originFromRequest(req)) : null;
+      updates.signatureDataUrl = stored.dataUrl;
       updates.signatureFileName = normalizeSignatureFileName(updates.signatureFileName);
-      await removeSignatureObject(previousKey);
+      // Keep the old S3 object when falling back locally; it may be part of an
+      // acknowledgement audit trail and the dev credentials may not delete it.
+      if (key) await removeSignatureObject(previousKey);
     } else {
       updates.signatureS3Key = null;
       updates.signatureS3Url = null;
@@ -374,7 +381,9 @@ export const getSignature = async (req: any, res: Response): Promise<void> => {
     // The URL of this app never expires, so the client can keep it.
     const url = signaturePublicUrl((user as any).signatureS3Key, originFromRequest(req));
     if (!url) {
-      const dataUrl = await readSignatureDataUrl((user as any).signatureS3Key);
+      const dataUrl =
+        (user as any).signatureDataUrl ||
+        (await readSignatureDataUrl((user as any).signatureS3Key));
       if (dataUrl) {
         res.json({ success: true, dataUrl });
         return;
