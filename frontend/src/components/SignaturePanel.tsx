@@ -27,9 +27,7 @@ export const SignaturePanel: React.FC<SignaturePanelProps> = ({
 }) => {
   // The artwork is served by this app; the URL that is stored in the database
   // is absolute, so only its path is used to load the picture.
-  const imageSrc = user.signatureUrl
-    ? signatureImageSrc(user.signatureUrl)
-    : user.signatureDataUrl || '';
+  const imageSrc = user.signatureDataUrl || signatureImageSrc(user.signatureUrl);
   const hasSignature = Boolean(imageSrc);
 
   return (

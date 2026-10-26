@@ -12,10 +12,9 @@ import {
 /**
  * Storage of the staff member's electronic signature.
  *
- * The artwork is kept in S3 (bucket `image-apa`, prefix `signatures_memo`) and
- * the database only holds the object key, so the `users` row no longer carries
- * a base64 blob. The key is what the rest of the system treats as the
- * signature "URL" — a presigned link is minted on demand.
+ * The artwork is kept under the configured signature storage provider and the
+ * database holds only its stable object key. S3 is the default provider; the
+ * `local` mode stores files on persistent app storage without AWS credentials.
  */
 
 /** Lifetime of a presigned signature link. */
@@ -127,9 +126,9 @@ export const storeSignatureImage = async (
 };
 
 /**
- * Development can explicitly keep newly captured signatures in the existing
- * users.signatureDataUrl column when S3 is unavailable. Production always
- * requires S3, so an upload failure there remains a real save error.
+ * In local development, keep a newly captured signature in the legacy data URL
+ * column if the selected storage provider itself is unavailable. Production
+ * should use either S3 or persistent local file storage.
  */
 export const storeSignatureImageForProfile = async (
   ownerId: string,
@@ -146,7 +145,7 @@ export const storeSignatureImageForProfile = async (
       process.env.SIGNATURE_STORAGE_MODE === 'local' && isLocalDevelopmentOrigin;
     if (!localFallbackEnabled) throw error;
 
-    console.warn('[SIG] S3 unavailable; storing this signature in the development database.');
+    console.warn('[SIG] Signature storage unavailable; storing this signature in the development database.');
     return { key: null, dataUrl };
   }
 };

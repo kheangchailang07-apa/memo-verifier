@@ -13,19 +13,23 @@ const MAX_HEIGHT = 320;
 const TRIM_PADDING = 8;
 
 /**
- * The signature artwork is served by this app under the layout of the bucket
- * (`/signatures_memo/<owner>/<file>`). The URL that is stored in the database
- * is absolute, but only its path is used to load the image: the request then
- * stays on this origin, so the session cookie is sent along and the picture
- * is never blocked by the content security policy.
+ * In production the API cookie belongs to the API hostname, which differs from
+ * the frontend hostname. Prefer the hydrated data URL where possible; when a
+ * URL is needed, direct image requests to the API origin so authentication is
+ * sent with the request.
  */
+const PUBLIC_API_ORIGIN = (import.meta.env.VITE_PUBLIC_API_URL || '').replace(/\/+$/, '');
+
 export const signatureImageSrc = (url?: string | null): string => {
   if (!url) return '';
+  if (url.startsWith('data:image/')) return url;
   const withoutQuery = url.split('?')[0].split('#')[0];
   const marker = '/signatures_memo/';
   const index = withoutQuery.indexOf(marker);
   if (index < 0) return url;
-  return withoutQuery.slice(index);
+  const imagePath = withoutQuery.slice(index);
+  if (import.meta.env.DEV) return imagePath;
+  return PUBLIC_API_ORIGIN ? `${PUBLIC_API_ORIGIN}${imagePath}` : url;
 };
 
 /**

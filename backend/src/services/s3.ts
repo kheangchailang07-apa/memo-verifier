@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
+import path from 'path';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { loadEnv } from '../config/env';
@@ -11,6 +13,35 @@ const PREFIX = (process.env.AWS_S3_PREFIX || 'pdfs_memo').replace(/^\/+|\/+$/g, 
 // Electronic signatures live in their own prefix so they can be lifecycle-managed
 // (and audited) separately from the memo attachments.
 const SIGNATURE_PREFIX = (process.env.AWS_S3_SIGNATURE_PREFIX || 'signatures_memo').replace(/^\/+|\/+$/g, '');
+const SIGNATURE_STORAGE_MODE = (process.env.SIGNATURE_STORAGE_MODE || 's3').trim().toLowerCase();
+const SIGNATURE_LOCAL_DIR = path.resolve(
+  process.env.SIGNATURE_LOCAL_DIR || path.join(process.cwd(), 'storage', 'signatures')
+);
+
+const isLocalSignatureStorage = (): boolean => SIGNATURE_STORAGE_MODE === 'local';
+
+/** Resolve a signature object key below the local storage root without allowing traversal. */
+const localSignaturePath = (key: string): string => {
+  const prefix = `${SIGNATURE_PREFIX}/`;
+  if (!key.startsWith(prefix)) throw new Error('Invalid signature object key.');
+
+  const segments = key.slice(prefix.length).split('/');
+  if (!segments.length || segments.some((segment) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment) || segment.includes('..'))) {
+    throw new Error('Invalid signature object key.');
+  }
+
+  const target = path.resolve(SIGNATURE_LOCAL_DIR, ...segments);
+  if (!target.startsWith(`${SIGNATURE_LOCAL_DIR}${path.sep}`)) {
+    throw new Error('Invalid signature object key.');
+  }
+  return target;
+};
+
+const missingLocalSignature = (): Error => {
+  const error = new Error('The stored signature was not found.');
+  error.name = 'NoSuchKey';
+  return error;
+};
 
 let client: S3Client | null = null;
 
@@ -127,6 +158,13 @@ export const s3KeyFromUrl = (value: string | null | undefined): string | null =>
 };
 
 export const uploadSignature = async (key: string, body: Buffer, contentType: string): Promise<void> => {
+  if (isLocalSignatureStorage()) {
+    const target = localSignaturePath(key);
+    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await writeFile(target, body, { flag: 'wx', mode: 0o600 });
+    return;
+  }
+
   await getClient().send(
     new PutObjectCommand({
       Bucket: BUCKET,
@@ -139,12 +177,27 @@ export const uploadSignature = async (key: string, body: Buffer, contentType: st
 };
 
 export const presignGetSignature = async (key: string, ttlSeconds: number): Promise<string> => {
+  if (isLocalSignatureStorage()) {
+    const publicPath = signaturePublicPath(key);
+    if (!publicPath) throw new Error('Invalid signature object key.');
+    return publicPath;
+  }
+
   return getSignedUrl(getClient(), new GetObjectCommand({ Bucket: BUCKET, Key: key }), {
     expiresIn: ttlSeconds,
   });
 };
 
 export const deleteSignatureObject = async (key: string): Promise<void> => {
+  if (isLocalSignatureStorage()) {
+    try {
+      await unlink(localSignaturePath(key));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    return;
+  }
+
   await getClient().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
 };
 
@@ -152,6 +205,19 @@ export const deleteSignatureObject = async (key: string): Promise<void> => {
 export const getSignatureObject = async (
   key: string
 ): Promise<{ body: Buffer; contentType: string | null }> => {
+  if (isLocalSignatureStorage()) {
+    let body: Buffer;
+    try {
+      body = await readFile(localSignaturePath(key));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw missingLocalSignature();
+      throw error;
+    }
+    const extension = path.extname(key).toLowerCase();
+    const contentType = extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : 'image/png';
+    return { body, contentType };
+  }
+
   const result = await getClient().send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
   const stream = result.Body as any;
   if (!stream) {
